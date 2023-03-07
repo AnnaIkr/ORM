@@ -1,46 +1,69 @@
-import sqlalchemy
+import sqlalchemy as sq
+import os
+from dotenv import load_dotenv
 from sqlalchemy.orm import sessionmaker
-import json
+import psycopg2
+import models as m
+import insert
 
-from models import create_tables, Publisher, Sale, Book, Stock, Shop
+load_dotenv()
+login = os.getenv('login')
+password = os.getenv('password')
+database = os.getenv('database')
+DSN = f'postgresql://{login}:{password}@localhost:5432/{database}'
+engine = sq.create_engine(DSN)
 
-SQLsystem = 'postgresql'
-login = 'postgres'
-password = '12345'
-host = 'localhost'
-port = 5432
-db_name = "2"
-DSN = f'{SQLsystem}://{login}:{password}@{host}:{port}/{db_name}'
-engine = sqlalchemy.create_engine(DSN)
+# создание таблиц
+m.create_tables(engine)
 
+# сессия
 Session = sessionmaker(bind=engine)
 session = Session()
 
-create_tables(engine)
-
-with open('tests_data.json', 'r') as db:
-    data = json.load(db)
-
-for line in data:
-    method = {
-        'publisher': Publisher,
-        'shop': Shop,
-        'book': Book,
-        'stock': Stock,
-        'sale': Sale,
-    }[line['model']]
-    session.add(method(id=line['pk'], **line.get('fields')))
-
+# создание объектов
+# заполнение таблиц
+insert.insert_data(session, file='fixtures/tests_data.json')
 session.commit()
 
-publ_name = input('Ведите имя писателя или id для вывода: ')
-if publ_name.isnumeric():
-    for c in session.query(Publisher).filter(
-            Publisher.id == int(publ_name)).all():
-        print(c)
-else:
-    for c in session.query(Publisher).filter(
-            Publisher.name.like(f'%{publ_name}%')).all():
-        print(c)
+
+author = 'O’Reilly'
+
+# запросы
+subq = session.query(m.Book).join(m.Publisher.books).filter(m.Publisher.name == author).subquery()
+subq1 = session.query(m.Stock).join(subq, m.Stock.id_book == subq.c.id).subquery()
+q = session.query(m.Sale).join(subq1, m.Sale.id_stock == subq1.c.id)
+
+list = []
+list1 = []
+i = 0
+for s in q.all():
+    list = []
+    list.append(str(s.stocks.books.title))
+    list.append(str(s.stocks.shops.name))
+    list.append(str(s.price))
+    list.append(str(s.date_sale))
+    list1.append(list)
+
+def print_pretty_table(data, cell_sep=' | ', header_separator=True):
+    """ Метод выводит в таблице данные запроса по продажам книг определенного автора в таблице"""
+    rows = len(data)
+    cols = len(data[0])
+    col_width = []
+    for col in range(cols):
+        columns = [data[row][col] for row in range(rows)]
+        col_width.append(len(max((columns), key=len)))
+    separator = "--+-".join('-' * n for n in col_width)
+    for i, row in enumerate(range(rows)):
+        if i == 1 and header_separator:
+            print("\t", separator)
+        result = []
+        for col in range(cols):
+            item = data[row][col].rjust(col_width[col])
+            result.append(item)
+        print(f"\t |{cell_sep.join(result)}|")
+
+
+data = [['Название книги', 'Магазин', 'Цена', 'Дата продажи'], *list1]
+print_pretty_table(data)
 
 session.close()
